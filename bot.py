@@ -1,10 +1,14 @@
 import os
 import re
 import time
+import threading
 import requests
+
 from bs4 import BeautifulSoup
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
 
 TEHRAN = ZoneInfo("Asia/Tehran")
 
@@ -12,6 +16,7 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHANNEL_ID = os.environ.get("CHANNEL_ID")
 
 CONTACT_NUMBER = "09145200578"
+
 
 MESGHAL_URLS = [
     "https://www.tgju.org/profile/mesghal",
@@ -23,11 +28,15 @@ GRAM18_URLS = [
     "https://gem.tgju.org/profile/geram18",
 ]
 
+
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Android 12) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36"
+    "User-Agent": (
+        "Mozilla/5.0 (Android 12) "
+        "AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36"
+    )
 }
 
-# اطلاعات معاملات روز
+
 day_date = None
 first_price = None
 last_price = None
@@ -35,6 +44,30 @@ highest_price = None
 lowest_price = None
 previous_price = None
 report_sent = False
+
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header(
+            "Content-Type",
+            "text/plain; charset=utf-8"
+        )
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+    def log_message(self, format, *args):
+        return
+
+
+def start_web_server():
+    port = int(os.environ.get("PORT", "10000"))
+    server = HTTPServer(
+        ("0.0.0.0", port),
+        HealthHandler
+    )
+    print(f"Web server listening on port {port}")
+    server.serve_forever()
 
 
 def persian_digits_to_english(text):
@@ -50,6 +83,7 @@ def clean_number(text):
     text = text.replace(",", "")
     text = text.replace("٬", "")
     text = text.replace("،", "")
+
     numbers = re.findall(r"\d+", text)
 
     if not numbers:
@@ -69,8 +103,15 @@ def get_price(urls):
 
             response.raise_for_status()
 
-            soup = BeautifulSoup(response.text, "html.parser")
-            text = soup.get_text(" ", strip=True)
+            soup = BeautifulSoup(
+                response.text,
+                "html.parser"
+            )
+
+            text = soup.get_text(
+                " ",
+                strip=True
+            )
 
             match = re.search(
                 r"نرخ فعلی\s*[:：]?\s*([\d,٬،۰-۹٠-٩]+)",
@@ -78,14 +119,19 @@ def get_price(urls):
             )
 
             if match:
-                rial_price = clean_number(match.group(1))
+                rial_price = clean_number(
+                    match.group(1)
+                )
 
                 if rial_price:
-                    # TGJU قیمت را ریالی می‌دهد
                     return rial_price // 10
 
         except Exception as e:
-            print("خطا در دریافت قیمت:", url, e)
+            print(
+                "خطا در دریافت قیمت:",
+                url,
+                e
+            )
 
     return None
 
@@ -98,14 +144,14 @@ def get_prices():
 
 
 def gregorian_to_jalali(gy, gm, gd):
-    g_days_in_month = [31, 28, 31, 30, 31, 30,
-                       31, 31, 30, 31, 30, 31]
+    g_days_in_month = [
+        31, 28, 31, 30, 31, 30,
+        31, 31, 30, 31, 30, 31
+    ]
 
-    j_days_in_month = [31, 31, 31, 31, 31, 31,
-                       30, 30, 30, 30, 30, 29]
+    jy = 979
 
     gy2 = gy - 1600
-    jy = 979
 
     days = (
         365 * gy2
@@ -119,8 +165,12 @@ def gregorian_to_jalali(gy, gm, gd):
     for i in range(gm - 1):
         days += g_days_in_month[i]
 
-    if gm > 2 and ((gy % 4 == 0 and gy % 100 != 0) or (gy % 400 == 0)):
-        days += 1
+    if gm > 2:
+        if (
+            (gy % 4 == 0 and gy % 100 != 0)
+            or gy % 400 == 0
+        ):
+            days += 1
 
     jy += 33 * (days // 12053)
     days %= 12053
@@ -144,6 +194,7 @@ def gregorian_to_jalali(gy, gm, gd):
 
 def jalali_date():
     now = datetime.now(TEHRAN)
+
     jy, jm, jd = gregorian_to_jalali(
         now.year,
         now.month,
@@ -158,7 +209,10 @@ def format_price(price):
 
 
 def send_telegram(message):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    url = (
+        f"https://api.telegram.org/"
+        f"bot{BOT_TOKEN}/sendMessage"
+    )
 
     data = {
         "chat_id": CHANNEL_ID,
@@ -167,19 +221,36 @@ def send_telegram(message):
         "disable_web_page_preview": True
     }
 
-    response = requests.post(
-        url,
-        data=data,
-        timeout=15
-    )
+    try:
+        response = requests.post(
+            url,
+            data=data,
+            timeout=15
+        )
 
-    if not response.ok:
-        print("خطای تلگرام:", response.text)
+        if not response.ok:
+            print(
+                "خطای تلگرام:",
+                response.text
+            )
 
-    return response.ok
+        return response.ok
+
+    except Exception as e:
+        print(
+            "خطا در ارسال به تلگرام:",
+            e
+        )
+
+        return False
 
 
-def send_live_message(mesghal, gram18, change, now):
+def send_live_message(
+    mesghal,
+    gram18,
+    change,
+    now
+):
     message = f"""🟡 <b>قیمت لحظه‌ای طلای آبشده رسولی‌زاده</b>
 
 ⚖️ مثقال طلا: <b>{format_price(mesghal)} تومان</b>
@@ -198,7 +269,10 @@ def send_daily_report():
     global report_sent
 
     if first_price is None or last_price is None:
-        print("اطلاعات کافی برای گزارش امروز وجود ندارد.")
+        print(
+            "اطلاعات کافی برای گزارش امروز وجود ندارد."
+        )
+
         report_sent = True
         return
 
@@ -218,7 +292,9 @@ def send_daily_report():
 
     if send_telegram(message):
         report_sent = True
-        print("گزارش ساعت 21 ارسال شد.")
+        print(
+            "گزارش ساعت 21 ارسال شد."
+        )
 
 
 def reset_day_if_needed(now):
@@ -258,14 +334,18 @@ def process_prices():
         print("قیمت دریافت نشد.")
         return
 
-    # ثبت سقف و کف بر اساس تمام قیمت‌های بررسی‌شده
-    if highest_price is None or mesghal > highest_price:
+    if (
+        highest_price is None
+        or mesghal > highest_price
+    ):
         highest_price = mesghal
 
-    if lowest_price is None or mesghal < lowest_price:
+    if (
+        lowest_price is None
+        or mesghal < lowest_price
+    ):
         lowest_price = mesghal
 
-    # اولین معامله روز
     if first_price is None:
         first_price = mesghal
         last_price = mesghal
@@ -280,13 +360,14 @@ def process_prices():
             now
         )
 
-        print("اولین قیمت روز ارسال شد.")
+        print(
+            "اولین قیمت روز ارسال شد."
+        )
+
         return
 
-    # آخرین قیمت مشاهده‌شده
     last_price = mesghal
 
-    # فقط اگر قیمت مثقال تغییر کرده باشد پیام جدید بفرست
     if mesghal != previous_price:
         change = mesghal - previous_price
 
@@ -301,16 +382,28 @@ def process_prices():
 
         previous_price = mesghal
 
-        print("قیمت تغییر کرد:", mesghal)
+        print(
+            "قیمت تغییر کرد:",
+            mesghal
+        )
 
 
 def main():
+    threading.Thread(
+        target=start_web_server,
+        daemon=True
+    ).start()
+
     if not BOT_TOKEN:
-        print("BOT_TOKEN تنظیم نشده است.")
+        print(
+            "BOT_TOKEN تنظیم نشده است."
+        )
         return
 
     if not CHANNEL_ID:
-        print("CHANNEL_ID تنظیم نشده است.")
+        print(
+            "CHANNEL_ID تنظیم نشده است."
+        )
         return
 
     print("ربات شروع شد.")
@@ -321,7 +414,6 @@ def main():
 
             reset_day_if_needed(now)
 
-            # ساعت 21:00 گزارش روزانه
             if (
                 now.hour >= 21
                 and day_date == now.date()
@@ -329,14 +421,17 @@ def main():
             ):
                 send_daily_report()
 
-            # فعالیت لحظه‌ای فقط از 09:00 تا قبل از 21:00
             if 9 <= now.hour < 21:
                 process_prices()
 
             time.sleep(15)
 
         except Exception as e:
-            print("خطای اصلی:", e)
+            print(
+                "خطای اصلی:",
+                e
+            )
+
             time.sleep(15)
 
 
